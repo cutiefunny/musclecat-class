@@ -2,10 +2,15 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { db } from '$lib/firebase';
-  import { doc, getDoc } from 'firebase/firestore';
+  import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+  import { goto } from '$app/navigation';
 
   let classInfo = null;
   let isLoading = true;
+  let isSubmitting = false;
+
+  let name = "";
+  let phone = "";
 
   $: classId = $page.params.id;
 
@@ -20,6 +25,12 @@
           ...data,
           datetime: data.datetime.toDate ? data.datetime.toDate() : new Date(data.datetime)
         };
+
+        // If already full, redirect to waitlist
+        if ((data.students?.length || 0) >= 3) {
+          alert("이 강의는 이미 정원이 찼습니다. 대기자 명단으로 안내합니다.");
+          goto(`/waitlist/${classId}`);
+        }
       }
     } catch (e) {
       console.error("Error fetching class details:", e);
@@ -38,9 +49,39 @@
     return dt.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: true });
   }
 
-  function submitForm(e) {
+  async function submitForm(e) {
     e.preventDefault();
-    window.location.href = `/confirmation/${classId}`;
+    if (isSubmitting) return;
+    isSubmitting = true;
+
+    try {
+      const docRef = doc(db, "guitarClass", classId);
+      const docSnap = await getDoc(docRef);
+      const data = docSnap.data();
+      const currentStudents = data.students || [];
+
+      if (currentStudents.length >= 3) {
+        alert("죄송합니다. 그 사이에 신청이 마감되었습니다.");
+        goto("/");
+        return;
+      }
+
+      await updateDoc(docRef, {
+        students: arrayUnion({
+          id: Math.random().toString(36).substring(2, 9),
+          name,
+          phone,
+          enrolledAt: new Date().toISOString()
+        })
+      });
+
+      goto(`/confirmation/${classId}?name=${encodeURIComponent(name)}&phone=${encodeURIComponent(phone)}`);
+    } catch (e) {
+      console.error(e);
+      alert("신청 중 오류가 발생했습니다: " + e.message);
+    } finally {
+      isSubmitting = false;
+    }
   }
 </script>
 
@@ -90,14 +131,30 @@
       <div class="group">
         <label class="block font-label text-[0.75rem] font-bold text-on-surface-variant uppercase tracking-widest mb-3 ml-1" for="full_name">성함</label>
         <div class="relative">
-          <input required class="w-full bg-surface-container-lowest border-none rounded-xl px-5 py-4 text-on-surface placeholder:text-outline/50 focus:ring-2 focus:ring-primary/20 transition-all shadow-sm focus:outline-none" id="full_name" name="full_name" placeholder="이름을 입력하세요" type="text"/>
+          <input 
+            required 
+            bind:value={name}
+            class="w-full bg-surface-container-lowest border-none rounded-xl px-5 py-4 text-on-surface placeholder:text-outline/50 focus:ring-2 focus:ring-primary/20 transition-all shadow-sm focus:outline-none" 
+            id="full_name" 
+            name="full_name" 
+            placeholder="이름을 입력하세요" 
+            type="text"
+          />
         </div>
       </div>
       <!-- Phone Field -->
       <div class="group">
         <label class="block font-label text-[0.75rem] font-bold text-on-surface-variant uppercase tracking-widest mb-3 ml-1" for="phone">연락처</label>
         <div class="relative">
-          <input required class="w-full bg-surface-container-lowest border-none rounded-xl px-5 py-4 text-on-surface placeholder:text-outline/50 focus:ring-2 focus:ring-primary/20 transition-all shadow-sm focus:outline-none" id="phone" name="phone" placeholder="010-0000-0000" type="tel"/>
+          <input 
+            required 
+            bind:value={phone}
+            class="w-full bg-surface-container-lowest border-none rounded-xl px-5 py-4 text-on-surface placeholder:text-outline/50 focus:ring-2 focus:ring-primary/20 transition-all shadow-sm focus:outline-none" 
+            id="phone" 
+            name="phone" 
+            placeholder="010-0000-0000" 
+            type="tel"
+          />
         </div>
       </div>
     </div>

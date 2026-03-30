@@ -102,8 +102,10 @@
       <div class="md:col-span-4 bg-primary text-on-primary p-7 rounded-xl flex flex-col justify-between">
         <div class="mb-8">
           <span class="font-label text-on-primary-container font-bold uppercase tracking-widest text-[10px] block mb-2">참석자</span>
-          <p class="font-headline font-bold text-xl mb-1">홍길동</p>
-          <p class="text-on-primary-container text-sm">•••• •••• 8812</p>
+          <p class="font-headline font-bold text-xl mb-1">{$page.url.searchParams.get('name') || '신청자'}</p>
+          <p class="text-on-primary-container text-sm">
+            {$page.url.searchParams.get('phone')?.replace(/(\d{3})\d{4}(\d{4})/, '$1-****-$2') || '진행 중'}
+          </p>
         </div>
         <div class="bg-primary-container/30 p-4 rounded-lg">
           <p class="text-[10px] font-label font-bold uppercase mb-1">상태</p>

@@ -3,7 +3,8 @@
   import { db } from "$lib/firebase";
   import { 
     collection, 
-    getDocs, 
+    getDoc,
+    getDocs,
     addDoc, 
     updateDoc, 
     deleteDoc, 
@@ -11,12 +12,15 @@
     query, 
     orderBy,
     where,
-    Timestamp 
+    Timestamp,
+    arrayRemove 
   } from "firebase/firestore";
 
   let classes = [];
   let isLoading = true;
   let isSubmitting = false;
+
+  console.log("Admin page script initialized");
 
   // Form State
   let editingId = null;
@@ -61,7 +65,8 @@
     }
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(e) {
+    if (e) e.preventDefault();
     isSubmitting = true;
     try {
       const payload = {
@@ -111,6 +116,49 @@
     }
   }
 
+  async function removeStudent(classId, student) {
+    console.log("=== REMOVE STUDENT DEBUG v6 (NO CONFIRM) ===");
+    console.log("Class ID:", classId);
+    console.log("Student:", student);
+
+    try {
+      console.log("Proceeding to fetch doc...");
+      const docRef = doc(db, "guitarClass", classId);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const currentData = docSnap.data();
+        const currentStudents = currentData.students || [];
+        console.log("Current DB students:", currentStudents);
+
+        const updatedStudents = currentStudents.filter(s => {
+          if (student.id && s.id) return s.id !== student.id;
+          
+          const sPhone = s.phone || s.phoneNumber;
+          const targetPhone = student.phone || student.phoneNumber;
+          return !(s.name === student.name && sPhone === targetPhone);
+        });
+
+        console.log(`Update: ${currentStudents.length} -> ${updatedStudents.length}`);
+
+        if (currentStudents.length === updatedStudents.length) {
+          alert("데이터를 찾을 수 없습니다.");
+          return;
+        }
+
+        await updateDoc(docRef, { students: updatedStudents });
+        console.log("Firestore update success.");
+        await fetchClasses();
+        alert("삭제되었습니다.");
+      } else {
+        console.error("Document not found in Firestore");
+      }
+    } catch (e) {
+      console.error("DEBUG ERROR:", e);
+      alert("오류 발생: " + e.message);
+    }
+  }
+
   function resetForm() {
     editingId = null;
     form = {
@@ -136,10 +184,11 @@
     <h2 class="text-2xl font-bold text-on-surface mb-6">
       {editingId ? "강의 수정" : "새 강의 추가"}
     </h2>
-    <form on:submit|preventDefault={handleSubmit} class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <form onsubmit={handleSubmit} class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div class="space-y-2">
-        <label class="text-xs font-bold uppercase tracking-wider text-on-surface-variant px-1">강의명</label>
+        <label for="class-title" class="text-xs font-bold uppercase tracking-wider text-on-surface-variant px-1">강의명</label>
         <input 
+          id="class-title"
           bind:value={form.title} 
           required 
           class="w-full bg-surface-container-lowest rounded-xl p-4 text-on-surface focus:ring-2 focus:ring-primary transition-all outline-none" 
@@ -147,8 +196,9 @@
         />
       </div>
       <div class="space-y-2">
-        <label class="text-xs font-bold uppercase tracking-wider text-on-surface-variant px-1">일시</label>
+        <label for="class-datetime" class="text-xs font-bold uppercase tracking-wider text-on-surface-variant px-1">일시</label>
         <input 
+          id="class-datetime"
           type="datetime-local" 
           bind:value={form.datetime} 
           required 
@@ -165,8 +215,7 @@
         </button>
         {#if editingId}
           <button 
-            type="button" 
-            on:click={resetForm}
+            onclick={resetForm}
             class="px-8 bg-surface-container-highest text-on-surface-variant rounded-xl font-bold"
           >
             취소
@@ -196,32 +245,72 @@
             {@const isFull = (cls.students?.length || 0) >= 3}
             <tr class="hover:bg-surface-container-low transition-colors group">
               <td class="px-6 py-5">
-                <p class="font-bold text-on-surface">{cls.title}</p>
-                <p class="text-xs text-on-surface-variant">{cls.datetime.replace('T', ' ')}</p>
+                <div class="flex items-center gap-3">
+                  <div>
+                    <p class="font-bold text-on-surface">{cls.title}</p>
+                    <p class="text-xs text-on-surface-variant">{cls.datetime.replace('T', ' ')}</p>
+                  </div>
+                </div>
               </td>
               <td class="px-6 py-5">
-                <p class="text-sm font-semibold {isFull ? 'text-error' : 'text-primary'}">
-                  {isFull ? '신청 마감' : '신청 중'}
-                </p>
-                <p class="text-xs text-on-surface-variant">{cls.students?.length || 0} / 3명 예약</p>
+                <div class="flex flex-col">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="w-1.5 h-1.5 rounded-full {isFull ? 'bg-error' : 'bg-primary'}"></span>
+                    <p class="text-sm font-bold {isFull ? 'text-error' : 'text-primary'}">
+                      {isFull ? '신청 마감' : '신청 중'}
+                    </p>
+                  </div>
+                  <p class="text-xs text-on-surface-variant font-medium">{cls.students?.length || 0} / 3명 예약됨</p>
+                </div>
               </td>
               <td class="px-6 py-5 text-right">
                 <div class="flex justify-end gap-2">
                   <button 
-                    on:click={() => editClass(cls)}
+                    onclick={() => editClass(cls)}
                     class="p-2 hover:bg-secondary/10 text-secondary rounded-lg transition-colors"
+                    title="수정"
                   >
                     <span class="material-symbols-outlined">edit</span>
                   </button>
                   <button 
-                    on:click={() => deleteClass(cls.id)}
+                    onclick={() => deleteClass(cls.id)}
                     class="p-2 hover:bg-error/10 text-error rounded-lg transition-colors"
+                    title="삭제"
                   >
                     <span class="material-symbols-outlined">delete</span>
                   </button>
                 </div>
               </td>
             </tr>
+            {#if cls.students && cls.students.length > 0}
+              <tr class="bg-surface-container-lowest/40 border-b border-outline-variant/5">
+                <td colspan="3" class="px-8 py-4">
+                  <div class="flex flex-col gap-2">
+                    <p class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <span class="material-symbols-outlined text-[14px]">groups</span>
+                      신청자 명단 ({cls.students.length})
+                    </p>
+                    <div class="flex flex-wrap gap-2">
+                      {#each cls.students as student}
+                        <div class="bg-surface-container-high/60 px-4 py-2.5 rounded-xl border border-outline-variant/10 flex items-center justify-between gap-4 group/item">
+                          <div class="flex items-center gap-3">
+                            <span class="font-bold text-sm text-on-surface">{student.name}</span>
+                            <span class="text-[11px] text-on-surface-variant font-medium tracking-tight bg-surface-container-highest/60 px-2 py-0.5 rounded-md">{student.phone || student.phoneNumber || '-'}</span>
+                          </div>
+                          <button 
+                            onclick={() => removeStudent(cls.id, student)}
+                            class="p-1.5 hover:bg-error/10 text-error rounded-lg opacity-60 hover:opacity-100 transition-all"
+                            title="신청 취소 처리"
+                          >
+                            <span class="material-symbols-outlined text-[16px]">close</span>
+                          </button>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         {/if}
       </tbody>
