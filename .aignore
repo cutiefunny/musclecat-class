@@ -1,0 +1,30 @@
+# Agent Context Ignored
+.git
+node_modules
+.svelte-kit
+build
+package
+.env
+.env.local
+.env.*
+.gitignore
+.aignore
+
+# Static assets that don't need context
+static/
+public/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.ico
+
+# Logs and lock files
+package-lock.json
+*.log
+npm-debug.log*
+
+# IDE/System
+.DS_Store
+.idea
+.vscode
