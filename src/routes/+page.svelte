@@ -241,6 +241,13 @@
     );
     return start + " — " + end.split(" ")[1];
   }
+
+  function scrollToReservation() {
+    const target = document.getElementById("reservation-section");
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth" });
+    }
+  }
 </script>
 
 <svelte:head>
@@ -252,12 +259,29 @@
 </svelte:head>
 
 <!-- Hero Section -->
-<section class="relative mb-8 rounded-xl overflow-hidden">
-  <img class="w-full h-full object-cover" alt="title" src="/title.jpg" />
-</section>
+<button
+  onclick={scrollToReservation}
+  class="w-full relative mb-12 rounded-xl overflow-hidden cursor-pointer group block"
+>
+  <img
+    class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02]"
+    alt="title"
+    src="/title.jpg"
+  />
+  <div
+    class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center pb-5"
+  >
+    <div
+      class="bg-surface-container-lowest/90 px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 transform translate-y-4 group-hover:translate-y-0 transition-transform"
+    >
+      <span class="material-symbols-outlined text-primary">arrow_downward</span>
+      <span class="text-sm font-headline font-bold text-primary">예약하기</span>
+    </div>
+  </div>
+</button>
 
 <!-- Location Section -->
-<section class="mb-12">
+<section class="mb-16">
   <div class="flex items-center gap-2 mb-4 px-1">
     <span class="material-symbols-outlined text-secondary">location_on</span>
     <h3 class="text-xl font-headline font-bold text-primary">
@@ -274,7 +298,10 @@
 </section>
 
 <!-- Class Grid -->
-<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+<div
+  id="reservation-section"
+  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+>
   {#each classes as cls}
     {@const slotsLeft = getSlotsLeft(cls)}
 
