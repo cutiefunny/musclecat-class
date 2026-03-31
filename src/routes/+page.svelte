@@ -12,6 +12,7 @@
     updateDoc,
     arrayUnion,
     arrayRemove,
+    runTransaction,
     onSnapshot,
   } from "firebase/firestore";
   import { showAlert, showConfirm } from "$lib/dialogStore";
@@ -34,9 +35,8 @@
   let name = "";
   let phone = "";
   let isSubmitting = false;
+  let isFriendRegistration = false;
   let autoCloseTimer = null;
-
-
 
   onMount(() => {
     // Identity & Auto-fill Logic
@@ -48,11 +48,6 @@
         Date.now().toString(36);
       localStorage.setItem("deviceId", deviceId);
     }
-
-    const savedName = localStorage.getItem("userName");
-    const savedPhone = localStorage.getItem("userPhone");
-    if (savedName) name = savedName;
-    if (savedPhone) phone = savedPhone;
 
     fetchClassesRealtime();
     if (window.naver && window.naver.maps) {
@@ -142,9 +137,17 @@
               );
 
               if (enrolledUser) {
-                return { ...cls, userStatus: "ENROLLED", userEntry: enrolledUser };
+                return {
+                  ...cls,
+                  userStatus: "ENROLLED",
+                  userEntry: enrolledUser,
+                };
               } else if (waitlistedUser) {
-                return { ...cls, userStatus: "WAITLIST", userEntry: waitlistedUser };
+                return {
+                  ...cls,
+                  userStatus: "WAITLIST",
+                  userEntry: waitlistedUser,
+                };
               }
               return null;
             })
@@ -169,8 +172,21 @@
     return Math.max(0, TOTAL_SLOTS - (cls.students?.length || 0));
   }
 
-  function openModal(cls) {
+  function openModal(cls, forFriend = false) {
     selectedClass = cls;
+    isFriendRegistration = forFriend;
+
+    if (forFriend) {
+      name = "";
+      phone = "";
+    } else {
+      // Identity & Auto-fill Logic
+      const savedName = localStorage.getItem("userName");
+      const savedPhone = localStorage.getItem("userPhone");
+      if (savedName) name = savedName;
+      if (savedPhone) phone = savedPhone;
+    }
+
     showModal = true;
   }
 
@@ -204,9 +220,11 @@
       return;
     }
 
-    // Save info to localStorage for future auto-fill
-    localStorage.setItem("userName", name);
-    localStorage.setItem("userPhone", phone);
+    // Save info to localStorage for future auto-fill (only if not friend registration)
+    if (!isFriendRegistration) {
+      localStorage.setItem("userName", name);
+      localStorage.setItem("userPhone", phone);
+    }
 
     isSubmitting = true;
     try {
@@ -225,6 +243,7 @@
           // Register as waitlist
           await updateDoc(docRef, {
             waitlist: arrayUnion({
+              id: Math.random().toString(36).substring(2, 9),
               name,
               phone,
               deviceId,
@@ -268,23 +287,44 @@
   }
 
   async function handleCancel(res) {
-    if (!(await showConfirm("정말 예약을 취소하시겠습니까?"))) return;
+    if (!(await showConfirm("정말 신청을 취소하시겠습니까?"))) return;
 
     try {
       const docRef = doc(db, "guitarClass", res.id);
-      if (res.userStatus === "ENROLLED") {
-        await updateDoc(docRef, {
-          students: arrayRemove(res.userEntry),
-        });
-      } else {
-        await updateDoc(docRef, {
-          waitlist: arrayRemove(res.userEntry),
-        });
-      }
-      await showAlert("취소되었습니다.");
+
+      await runTransaction(db, async (transaction) => {
+        const sfDoc = await transaction.get(docRef);
+        if (!sfDoc.exists()) return;
+
+        const data = sfDoc.data();
+        let students = data.students || [];
+        let waitlist = data.waitlist || [];
+
+        if (res.userStatus === "ENROLLED") {
+          // 1. Remove the specifically canceling record from students
+          students = students.filter((s) => s.id !== res.userEntry.id);
+
+          // 2. If there's someone in the waitlist, promote them (FIFO)
+          if (waitlist.length > 0) {
+            const nextInQueue = waitlist.shift();
+            students.push({
+              ...nextInQueue,
+              enrolledAt: new Date().toISOString(),
+              status: "PROMOTED",
+            });
+          }
+        } else {
+          // Simply remove the specific entry from waitlist
+          waitlist = waitlist.filter((w) => w.id !== res.userEntry.id);
+        }
+
+        transaction.update(docRef, { students, waitlist });
+      });
+
+      await showAlert("성공적으로 취소되었습니다.");
     } catch (e) {
-      console.error(e);
-      await showAlert("취소 중 오류가 발생했습니다.");
+      console.error("Cancel Error:", e);
+      await showAlert("취소 처리 중 오류가 발생했습니다.");
     }
   }
 
@@ -372,8 +412,12 @@
 >
   {#each classes as cls}
     {@const slotsLeft = getSlotsLeft(cls)}
-    {@const enrolledUser = (cls.students || []).find((s) => s.deviceId === deviceId)}
-    {@const waitlistedUser = (cls.waitlist || []).find((w) => w.deviceId === deviceId)}
+    {@const enrolledUser = (cls.students || []).find(
+      (s) => s.deviceId === deviceId,
+    )}
+    {@const waitlistedUser = (cls.waitlist || []).find(
+      (w) => w.deviceId === deviceId,
+    )}
     {@const isApplied = enrolledUser || waitlistedUser}
 
     <div
@@ -429,26 +473,63 @@
 
       {#if isApplied}
         <div class="mt-auto space-y-3">
-          <div
-            class="flex items-center justify-center gap-2 py-3 bg-primary/5 rounded-xl border border-primary/10"
-          >
-            <span class="material-symbols-outlined text-primary text-[20px]">
-              {enrolledUser ? "check_circle" : "hourglass_top"}
-            </span>
-            <span class="text-sm font-headline font-bold text-primary">
-              {enrolledUser ? "예약이 확정되었습니다" : "대기자로 등록되었습니다"}
-            </span>
+          <div class="space-y-2 max-h-[120px] overflow-y-auto pr-1">
+            {#each (cls.students || []).filter((s) => s.deviceId === deviceId) as myEntry}
+              <div
+                class="flex items-center justify-between p-3 bg-primary/5 rounded-xl border border-primary/20"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-primary text-lg"
+                    >check_circle</span
+                  >
+                  <span class="text-xs font-headline font-bold text-on-surface"
+                    >{myEntry.name}</span
+                  >
+                </div>
+                <button
+                  onclick={() =>
+                    handleCancel({
+                      ...cls,
+                      userStatus: "ENROLLED",
+                      userEntry: myEntry,
+                    })}
+                  class="text-[11px] font-bold text-error/60 hover:text-error transition-colors"
+                  >취소</button
+                >
+              </div>
+            {/each}
+
+            {#each (cls.waitlist || []).filter((w) => w.deviceId === deviceId) as myWait}
+              <div
+                class="flex items-center justify-between p-3 bg-secondary/5 rounded-xl border border-secondary/20"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="material-symbols-outlined text-secondary text-lg"
+                    >hourglass_top</span
+                  >
+                  <span class="text-xs font-headline font-bold text-on-surface"
+                    >{myWait.name}</span
+                  >
+                </div>
+                <button
+                  onclick={() =>
+                    handleCancel({
+                      ...cls,
+                      userStatus: "WAITLIST",
+                      userEntry: myWait,
+                    })}
+                  class="text-[11px] font-bold text-error/60 hover:text-error transition-colors"
+                  >취소</button
+                >
+              </div>
+            {/each}
           </div>
+
           <button
-            onclick={() =>
-              handleCancel({
-                ...cls,
-                userStatus: enrolledUser ? "ENROLLED" : "WAITLIST",
-                userEntry: enrolledUser || waitlistedUser,
-              })}
-            class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide border border-outline-variant/20 text-on-surface-variant hover:bg-error/5 hover:text-error hover:border-error/20 transition-all"
+            onclick={() => openModal(cls, true)}
+            class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide btn-primary-gradient text-on-primary shadow-lg shadow-primary/20 active:scale-[0.98] transition-all"
           >
-            신청 취소하기
+            친구도 예약해주기
           </button>
         </div>
       {:else}
@@ -459,7 +540,7 @@
             ? 'bg-surface-container-highest text-on-surface-variant'
             : 'btn-primary-gradient text-on-primary'}"
         >
-          {slotsLeft === 0 ? "대기자 등록" : "지금 예약하기"}
+          {slotsLeft === 0 ? "대기자 등록" : "예약하기"}
         </button>
       {/if}
     </div>

@@ -13,7 +13,8 @@
     orderBy,
     where,
     Timestamp,
-    arrayRemove 
+    arrayRemove,
+    runTransaction 
   } from "firebase/firestore";
   import { showAlert, showConfirm } from "$lib/dialogStore";
 
@@ -118,45 +119,60 @@
   }
 
   async function removeStudent(classId, student) {
-    console.log("=== REMOVE STUDENT DEBUG v6 (NO CONFIRM) ===");
-    console.log("Class ID:", classId);
-    console.log("Student:", student);
+    if (!(await showConfirm(`${student.name}님을 예약 명단에서 제외하시겠습니까?\n(제외 시 대기자가 있으면 자동으로 승급됩니다)`))) return;
 
     try {
-      console.log("Proceeding to fetch doc...");
       const docRef = doc(db, "guitarClass", classId);
-      const docSnap = await getDoc(docRef);
-      
-      if (docSnap.exists()) {
-        const currentData = docSnap.data();
-        const currentStudents = currentData.students || [];
-        console.log("Current DB students:", currentStudents);
+      await runTransaction(db, async (transaction) => {
+        const docSnap = await transaction.get(docRef);
+        if (!docSnap.exists()) return;
 
-        const updatedStudents = currentStudents.filter(s => {
+        const data = docSnap.data();
+        let students = data.students || [];
+        let waitlist = data.waitlist || [];
+
+        // 1. Remove targeted student
+        students = students.filter(s => {
           if (student.id && s.id) return s.id !== student.id;
-          
           const sPhone = s.phone || s.phoneNumber;
           const targetPhone = student.phone || student.phoneNumber;
           return !(s.name === student.name && sPhone === targetPhone);
         });
 
-        console.log(`Update: ${currentStudents.length} -> ${updatedStudents.length}`);
-
-        if (currentStudents.length === updatedStudents.length) {
-          await showAlert("데이터를 찾을 수 없습니다.");
-          return;
+        // 2. Automated promotion from waitlist
+        if (waitlist.length > 0) {
+          const nextInQueue = waitlist.shift();
+          students.push({
+            ...nextInQueue,
+            enrolledAt: new Date().toISOString(),
+            status: "PROMOTED_BY_ADMIN"
+          });
         }
 
-        await updateDoc(docRef, { students: updatedStudents });
-        console.log("Firestore update success.");
-        await fetchClasses();
-        await showAlert("삭제되었습니다.");
-      } else {
-        console.error("Document not found in Firestore");
-      }
+        transaction.update(docRef, { students, waitlist });
+      });
+
+      await fetchClasses();
+      await showAlert("처리가 완료되었습니다.");
     } catch (e) {
-      console.error("DEBUG ERROR:", e);
+      console.error(e);
       await showAlert("오류 발생: " + e.message);
+    }
+  }
+
+  async function removeWaitlistEntry(classId, waitEntry) {
+    if (!(await showConfirm(`${waitEntry.name}님을 대기 명단에서 삭제하시겠습니까?`))) return;
+
+    try {
+      const docRef = doc(db, "guitarClass", classId);
+      await updateDoc(docRef, {
+        waitlist: arrayRemove(waitEntry)
+      });
+      await fetchClasses();
+      await showAlert("삭제되었습니다.");
+    } catch (e) {
+      console.error(e);
+      await showAlert("삭제 중 오류 발생");
     }
   }
 
@@ -283,31 +299,92 @@
                 </div>
               </td>
             </tr>
-            {#if cls.students && cls.students.length > 0}
-              <tr class="bg-surface-container-lowest/40 border-b border-outline-variant/5">
-                <td colspan="3" class="px-8 py-4">
-                  <div class="flex flex-col gap-2">
-                    <p class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                      <span class="material-symbols-outlined text-[14px]">groups</span>
-                      신청자 명단 ({cls.students.length})
-                    </p>
-                    <div class="flex flex-wrap gap-2">
-                      {#each cls.students as student}
-                        <div class="bg-surface-container-high/60 px-4 py-2.5 rounded-xl border border-outline-variant/10 flex items-center justify-between gap-4 group/item">
-                          <div class="flex items-center gap-3">
-                            <span class="font-bold text-sm text-on-surface">{student.name}</span>
-                            <span class="text-[11px] text-on-surface-variant font-medium tracking-tight bg-surface-container-highest/60 px-2 py-0.5 rounded-md">{student.phone || student.phoneNumber || '-'}</span>
-                          </div>
-                          <button 
-                            onclick={() => removeStudent(cls.id, student)}
-                            class="p-1.5 hover:bg-error/10 text-error rounded-lg opacity-60 hover:opacity-100 transition-all"
-                            title="신청 취소 처리"
+            {#if (cls.students && cls.students.length > 0) || (cls.waitlist && cls.waitlist.length > 0)}
+              <tr
+                class="bg-surface-container-lowest/40 border-b border-outline-variant/5"
+              >
+                <td colspan="3" class="px-8 py-6">
+                  <div class="flex flex-col gap-6">
+                    {#if cls.students && cls.students.length > 0}
+                      <div>
+                        <p
+                          class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2 flex items-center gap-1.5 opacity-60"
+                        >
+                          <span class="material-symbols-outlined text-[14px]"
+                            >groups</span
                           >
-                            <span class="material-symbols-outlined text-[16px]">close</span>
-                          </button>
+                          예약 확정 명단 ({cls.students.length})
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          {#each cls.students as student}
+                            <div
+                              class="bg-surface-container-high/60 px-4 py-2.5 rounded-xl border border-outline-variant/10 flex items-center justify-between gap-4 group/item"
+                            >
+                              <div class="flex items-center gap-3">
+                                <span class="font-bold text-sm text-on-surface"
+                                  >{student.name}</span
+                                >
+                                <span
+                                  class="text-[11px] text-on-surface-variant font-medium tracking-tight bg-surface-container-highest/60 px-2 py-0.5 rounded-md"
+                                  >{student.phone ||
+                                    student.phoneNumber ||
+                                    "-"}</span
+                                >
+                              </div>
+                              <button
+                                onclick={() => removeStudent(cls.id, student)}
+                                class="p-1.5 hover:bg-error/10 text-error rounded-lg opacity-60 hover:opacity-100 transition-all"
+                                title="신청 취소 처리"
+                              >
+                                <span class="material-symbols-outlined text-[16px]"
+                                  >close</span
+                                >
+                              </button>
+                            </div>
+                          {/each}
                         </div>
-                      {/each}
-                    </div>
+                      </div>
+                    {/if}
+
+                    {#if cls.waitlist && cls.waitlist.length > 0}
+                      <div>
+                        <p
+                          class="text-[10px] font-bold text-secondary uppercase tracking-wider mb-2 flex items-center gap-1.5"
+                        >
+                          <span class="material-symbols-outlined text-[14px]"
+                            >hourglass_empty</span
+                          >
+                          대기자 명단 ({cls.waitlist.length})
+                        </p>
+                        <div class="flex flex-wrap gap-2">
+                          {#each cls.waitlist as wait}
+                            <div
+                              class="bg-secondary/5 px-4 py-2.5 rounded-xl border border-secondary/10 flex items-center justify-between gap-4 group/item"
+                            >
+                              <div class="flex items-center gap-3">
+                                <span class="font-bold text-sm text-secondary"
+                                  >{wait.name}</span
+                                >
+                                <span
+                                  class="text-[11px] text-secondary/60 font-medium tracking-tight bg-secondary/5 px-2 py-0.5 rounded-md"
+                                  >{wait.phone || "-"}</span
+                                >
+                              </div>
+                              <button
+                                onclick={() =>
+                                  removeWaitlistEntry(cls.id, wait)}
+                                class="p-1.5 hover:bg-error/10 text-error rounded-lg opacity-40 hover:opacity-100 transition-all"
+                                title="대기 취소 처리"
+                              >
+                                <span class="material-symbols-outlined text-[16px]"
+                                  >close</span
+                                >
+                              </button>
+                            </div>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
                   </div>
                 </td>
               </tr>
