@@ -15,6 +15,7 @@
     Timestamp,
     arrayRemove 
   } from "firebase/firestore";
+  import { showAlert, showConfirm } from "$lib/dialogStore";
 
   let classes = [];
   let isLoading = true;
@@ -78,16 +79,16 @@
 
       if (editingId) {
         await updateDoc(doc(db, "guitarClass", editingId), payload);
-        alert("수정 완료");
+        await showAlert("수정 완료");
       } else {
         await addDoc(collection(db, "guitarClass"), payload);
-        alert("추가 완료");
+        await showAlert("추가 완료");
       }
       resetForm();
       await fetchClasses();
     } catch (e) {
       console.error(e);
-      alert("작업 중 오류 발생: " + e.message);
+      await showAlert("작업 중 오류 발생: " + e.message);
     } finally {
       isSubmitting = false;
     }
@@ -105,14 +106,14 @@
   }
 
   async function deleteClass(id) {
-    if (!confirm("정말로 이 강의를 삭제하시겠습니까?")) return;
+    if (!(await showConfirm("정말로 이 강의를 삭제하시겠습니까?"))) return;
     try {
       await deleteDoc(doc(db, "guitarClass", id));
       await fetchClasses();
-      alert("삭제되었습니다.");
+      await showAlert("삭제되었습니다.");
     } catch (e) {
       console.error(e);
-      alert("삭제 실패");
+      await showAlert("삭제 실패");
     }
   }
 
@@ -142,20 +143,20 @@
         console.log(`Update: ${currentStudents.length} -> ${updatedStudents.length}`);
 
         if (currentStudents.length === updatedStudents.length) {
-          alert("데이터를 찾을 수 없습니다.");
+          await showAlert("데이터를 찾을 수 없습니다.");
           return;
         }
 
         await updateDoc(docRef, { students: updatedStudents });
         console.log("Firestore update success.");
         await fetchClasses();
-        alert("삭제되었습니다.");
+        await showAlert("삭제되었습니다.");
       } else {
         console.error("Document not found in Firestore");
       }
     } catch (e) {
       console.error("DEBUG ERROR:", e);
-      alert("오류 발생: " + e.message);
+      await showAlert("오류 발생: " + e.message);
     }
   }
 

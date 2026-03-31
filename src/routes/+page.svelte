@@ -11,29 +11,49 @@
     getDoc,
     updateDoc,
     arrayUnion,
+    arrayRemove,
     onSnapshot,
   } from "firebase/firestore";
-  import { goto } from "$app/navigation";
+  import { showAlert, showConfirm } from "$lib/dialogStore";
 
   const NAVER_MAP_ID = import.meta.env.VITE_NAVER_MAPS_CLIENT_ID;
 
   let classes = [];
+  let myReservations = [];
   let isLoading = true;
   let unsubscribe = null;
   let mapElement;
   let map;
 
-  // Modal State
+  // Modal & Dialog State
   let showModal = false;
   let showSuccessModal = false;
   let successInfo = null;
   let selectedClass = null;
+  let deviceId = "";
   let name = "";
   let phone = "";
   let isSubmitting = false;
   let autoCloseTimer = null;
 
+
+
   onMount(() => {
+    // Identity & Auto-fill Logic
+    deviceId = localStorage.getItem("deviceId");
+    if (!deviceId) {
+      deviceId =
+        "dev_" +
+        Math.random().toString(36).substring(2, 15) +
+        Date.now().toString(36);
+      localStorage.setItem("deviceId", deviceId);
+    }
+
+    const savedName = localStorage.getItem("userName");
+    const savedPhone = localStorage.getItem("userPhone");
+    if (savedName) name = savedName;
+    if (savedPhone) phone = savedPhone;
+
     fetchClassesRealtime();
     if (window.naver && window.naver.maps) {
       initMap();
@@ -101,13 +121,35 @@
       unsubscribe = onSnapshot(
         q,
         (querySnapshot) => {
-          classes = querySnapshot.docs.map((doc) => ({
+          const allData = querySnapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
             datetime: doc.data().datetime.toDate
               ? doc.data().datetime.toDate()
               : new Date(doc.data().datetime),
           }));
+
+          classes = allData;
+
+          // Filter for my reservations (both enrolled and waitlisted)
+          myReservations = allData
+            .map((cls) => {
+              const enrolledUser = (cls.students || []).find(
+                (s) => s.deviceId === deviceId,
+              );
+              const waitlistedUser = (cls.waitlist || []).find(
+                (w) => w.deviceId === deviceId,
+              );
+
+              if (enrolledUser) {
+                return { ...cls, userStatus: "ENROLLED", userEntry: enrolledUser };
+              } else if (waitlistedUser) {
+                return { ...cls, userStatus: "WAITLIST", userEntry: waitlistedUser };
+              }
+              return null;
+            })
+            .filter((r) => r !== null);
+
           isLoading = false;
         },
         (error) => {
@@ -135,8 +177,7 @@
   function closeModal() {
     showModal = false;
     selectedClass = null;
-    name = "";
-    phone = "";
+    // Note: We no longer clear 'name' and 'phone' so they stay for auto-fill
   }
 
   function openSuccessModal(info) {
@@ -159,9 +200,13 @@
   async function handleEnrollment() {
     if (isSubmitting) return;
     if (!name || !phone) {
-      alert("이름과 전화번호를 입력해주세요.");
+      await showAlert("이름과 전화번호를 입력해주세요.");
       return;
     }
+
+    // Save info to localStorage for future auto-fill
+    localStorage.setItem("userName", name);
+    localStorage.setItem("userPhone", phone);
 
     isSubmitting = true;
     try {
@@ -173,8 +218,8 @@
       // Real-time double check
       if (currentStudents.length >= TOTAL_SLOTS) {
         if (
-          confirm(
-            "죄송합니다. 그 사이에 예약이 마감되었습니다. 대신 대기자 명단에 등록하시겠습니까?",
+          await showConfirm(
+            "죄송합니다. 그 사이에 예약이 마감되었습니다.\n대신 대기자 명단에 등록하시겠습니까?",
           )
         ) {
           // Register as waitlist
@@ -182,10 +227,11 @@
             waitlist: arrayUnion({
               name,
               phone,
+              deviceId,
               registeredAt: new Date().toISOString(),
             }),
           });
-          alert("대기자 명단에 등록되었습니다.");
+          await showAlert("대기자 명단에 등록되었습니다.");
           closeModal();
         } else {
           closeModal();
@@ -199,6 +245,7 @@
           id: Math.random().toString(36).substring(2, 9),
           name,
           phone,
+          deviceId,
           enrolledAt: new Date().toISOString(),
         }),
       });
@@ -214,9 +261,30 @@
       openSuccessModal(info);
     } catch (e) {
       console.error(e);
-      alert("예약 중 오류가 발생했습니다.");
+      await showAlert("예약 중 오류가 발생했습니다.");
     } finally {
       isSubmitting = false;
+    }
+  }
+
+  async function handleCancel(res) {
+    if (!(await showConfirm("정말 예약을 취소하시겠습니까?"))) return;
+
+    try {
+      const docRef = doc(db, "guitarClass", res.id);
+      if (res.userStatus === "ENROLLED") {
+        await updateDoc(docRef, {
+          students: arrayRemove(res.userEntry),
+        });
+      } else {
+        await updateDoc(docRef, {
+          waitlist: arrayRemove(res.userEntry),
+        });
+      }
+      await showAlert("취소되었습니다.");
+    } catch (e) {
+      console.error(e);
+      await showAlert("취소 중 오류가 발생했습니다.");
     }
   }
 
@@ -304,18 +372,22 @@
 >
   {#each classes as cls}
     {@const slotsLeft = getSlotsLeft(cls)}
+    {@const enrolledUser = (cls.students || []).find((s) => s.deviceId === deviceId)}
+    {@const waitlistedUser = (cls.waitlist || []).find((w) => w.deviceId === deviceId)}
+    {@const isApplied = enrolledUser || waitlistedUser}
 
     <div
       class="
       rounded-xl p-7 flex flex-col justify-between group transition-all duration-300 border
-      {slotsLeft === 0
+      {slotsLeft === 0 && !isApplied
         ? 'bg-surface-dim/40 border-outline-variant/20 grayscale-[0.5]'
         : 'bg-surface-container-low hover:shadow-[0_8px_32px_rgba(48,20,0,0.06)] border-transparent hover:border-outline-variant/10'}
+      {isApplied ? 'ring-2 ring-primary/20 border-primary/20' : ''}
     "
     >
       <div>
         <h4
-          class="font-headline text-2xl font-bold {slotsLeft === 0
+          class="font-headline text-2xl font-bold {slotsLeft === 0 && !isApplied
             ? 'text-primary opacity-80'
             : 'text-primary'} mb-2"
         >
@@ -323,7 +395,8 @@
         </h4>
         <div class="space-y-3 mb-8">
           <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0
+            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
+            !isApplied
               ? '60'
               : '80'}"
           >
@@ -332,7 +405,8 @@
             >
           </div>
           <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0
+            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
+            !isApplied
               ? '60'
               : '80'}"
           >
@@ -341,7 +415,8 @@
             >
           </div>
           <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0
+            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
+            !isApplied
               ? '60'
               : '80'}"
           >
@@ -351,15 +426,42 @@
           </div>
         </div>
       </div>
-      <button
-        onclick={() => openModal(cls)}
-        class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide {slotsLeft ===
-        0
-          ? 'bg-surface-container-highest text-on-surface-variant'
-          : 'btn-primary-gradient text-on-primary'}"
-      >
-        {slotsLeft === 0 ? "대기자 등록" : "지금 예약하기"}
-      </button>
+
+      {#if isApplied}
+        <div class="mt-auto space-y-3">
+          <div
+            class="flex items-center justify-center gap-2 py-3 bg-primary/5 rounded-xl border border-primary/10"
+          >
+            <span class="material-symbols-outlined text-primary text-[20px]">
+              {enrolledUser ? "check_circle" : "hourglass_top"}
+            </span>
+            <span class="text-sm font-headline font-bold text-primary">
+              {enrolledUser ? "예약이 확정되었습니다" : "대기자로 등록되었습니다"}
+            </span>
+          </div>
+          <button
+            onclick={() =>
+              handleCancel({
+                ...cls,
+                userStatus: enrolledUser ? "ENROLLED" : "WAITLIST",
+                userEntry: enrolledUser || waitlistedUser,
+              })}
+            class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide border border-outline-variant/20 text-on-surface-variant hover:bg-error/5 hover:text-error hover:border-error/20 transition-all"
+          >
+            신청 취소하기
+          </button>
+        </div>
+      {:else}
+        <button
+          onclick={() => openModal(cls)}
+          class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide {slotsLeft ===
+          0
+            ? 'bg-surface-container-highest text-on-surface-variant'
+            : 'btn-primary-gradient text-on-primary'}"
+        >
+          {slotsLeft === 0 ? "대기자 등록" : "지금 예약하기"}
+        </button>
+      {/if}
     </div>
   {/each}
 </div>
