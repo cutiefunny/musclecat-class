@@ -78,7 +78,13 @@
     new window.naver.maps.Marker({
       position: point,
       map: map,
-      title: "근육고양이스튜디오",
+      title: "근육고양이공작소",
+      icon: {
+        url: "/pin.png",
+        scaledSize: new window.naver.maps.Size(40, 50),
+        origin: new window.naver.maps.Point(0, 0),
+        anchor: new window.naver.maps.Point(20, 40),
+      },
     });
   }
 
