@@ -46,15 +46,39 @@
   });
 
   function initMap() {
-    const location = new window.naver.maps.LatLng(37.548486, 126.923292);
+    const address = "서울특별시 마포구 독막로 79";
+
+    // Using the Geocoder submodule included in the script
+    window.naver.maps.Service.geocode(
+      {
+        query: address,
+      },
+      function (status, response) {
+        if (status !== window.naver.maps.Service.Status.OK) {
+          console.error("Geocoding failed, falling back to coordinates.");
+          renderMap(new window.naver.maps.LatLng(37.548486, 126.923292));
+          return;
+        }
+
+        const result = response.v2.addresses[0];
+        const point = new window.naver.maps.LatLng(result.y, result.x);
+        renderMap(point);
+      },
+    );
+  }
+
+  function renderMap(point) {
+    if (!mapElement) return;
     map = new window.naver.maps.Map(mapElement, {
-      center: location,
-      zoom: 17,
+      center: point,
+      zoom: 18, // Zoomed in 2x (from 17 to 18)
+      scrollWheel: false,
     });
+
     new window.naver.maps.Marker({
-      position: location,
+      position: point,
       map: map,
-      title: "근육고양이공작소",
+      title: "근육고양이스튜디오",
     });
   }
 
@@ -217,7 +241,7 @@
   <title>찍먹 기타교실</title>
   <script
     type="text/javascript"
-    src="https://openapi.map.naver.com/openapi/v3/maps.js?ncpClientId={NAVER_MAP_ID}"
+    src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId={NAVER_MAP_ID}&submodules=geocoder"
   ></script>
 </svelte:head>
 
@@ -231,15 +255,15 @@
   <div class="flex items-center gap-2 mb-4 px-1">
     <span class="material-symbols-outlined text-secondary">location_on</span>
     <h3 class="text-xl font-headline font-bold text-primary">
-      근육고양이공작소
+      근육고양이스튜디오
     </h3>
     <span class="text-sm text-on-surface-variant ml-2 font-medium"
-      >마포구 독막로 79 (상수동)</span
+      >마포구 독막로 79</span
     >
   </div>
   <div
     bind:this={mapElement}
-    class="w-full h-[300px] md:h-[400px] rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden"
+    class="w-full aspect-[2/1] min-h-[250px] rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden"
   ></div>
 </section>
 
