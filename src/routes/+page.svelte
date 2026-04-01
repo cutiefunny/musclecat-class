@@ -213,6 +213,53 @@
     if (autoCloseTimer) clearTimeout(autoCloseTimer);
   }
 
+  function formatApiDate(dt) {
+    const month = dt.getMonth() + 1;
+    const date = dt.getDate();
+    let hour = dt.getHours();
+    const ampm = hour >= 12 ? "저녁" : "오전";
+    if (hour > 12) hour -= 12;
+    if (hour === 0) hour = 12;
+    return `${month}월${date}일 ${ampm}${hour}시`;
+  }
+
+  async function callConfirmationApi(name, phone, className, datetime) {
+    try {
+      const classDate = formatApiDate(datetime);
+      await fetch("https://musclecat.co.kr/sendClassConfirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: phone.replace(/[^0-9]/g, ""),
+          className,
+          classDate,
+          userName: name,
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to call confirmation API:", e);
+    }
+  }
+
+  async function callWaitingApi(name, phone, className, datetime, waitingNo) {
+    try {
+      const classDate = formatApiDate(datetime);
+      await fetch("https://musclecat.co.kr/sendClassWaiting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: phone.replace(/[^0-9]/g, ""),
+          className,
+          classDate,
+          userName: name,
+          waitingNo: String(waitingNo),
+        }),
+      });
+    } catch (e) {
+      console.error("Failed to call waiting API:", e);
+    }
+  }
+
   async function handleEnrollment() {
     if (isSubmitting) return;
     if (!name || !phone) {
@@ -250,6 +297,17 @@
               registeredAt: new Date().toISOString(),
             }),
           });
+
+          // API Call
+          const waitingNo = (data.waitlist || []).length + 1;
+          callWaitingApi(
+            name,
+            phone,
+            selectedClass.title,
+            selectedClass.datetime,
+            waitingNo,
+          );
+
           await showAlert("대기자 명단에 등록되었습니다.");
           closeModal();
         } else {
@@ -268,6 +326,14 @@
           enrolledAt: new Date().toISOString(),
         }),
       });
+
+      // API Call
+      callConfirmationApi(
+        name,
+        phone,
+        selectedClass.title,
+        selectedClass.datetime,
+      );
 
       const info = {
         title: selectedClass.title,
@@ -289,6 +355,8 @@
   async function handleCancel(res) {
     if (!(await showConfirm("정말 신청을 취소하시겠습니까?"))) return;
 
+    let promotedUser = null;
+
     try {
       const docRef = doc(db, "guitarClass", res.id);
 
@@ -306,9 +374,9 @@
 
           // 2. If there's someone in the waitlist, promote them (FIFO)
           if (waitlist.length > 0) {
-            const nextInQueue = waitlist.shift();
+            promotedUser = waitlist.shift();
             students.push({
-              ...nextInQueue,
+              ...promotedUser,
               enrolledAt: new Date().toISOString(),
               status: "PROMOTED",
             });
@@ -320,6 +388,15 @@
 
         transaction.update(docRef, { students, waitlist });
       });
+
+      if (promotedUser) {
+        callConfirmationApi(
+          promotedUser.name,
+          promotedUser.phone,
+          res.title,
+          res.datetime,
+        );
+      }
 
       await showAlert("성공적으로 취소되었습니다.");
     } catch (e) {

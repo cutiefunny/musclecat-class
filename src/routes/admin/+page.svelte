@@ -185,6 +185,68 @@
       students: []
     };
   }
+
+  function formatApiDate(dt) {
+    if (!dt) return "";
+    const month = dt.getMonth() + 1;
+    const date = dt.getDate();
+    let hour = dt.getHours();
+    const ampm = hour >= 12 ? "저녁" : "오전";
+    if (hour > 12) hour -= 12;
+    if (hour === 0) hour = 12;
+    return `${month}월${date}일 ${ampm}${hour}시`;
+  }
+
+  async function sendClassWideNotification(endpoint, cls) {
+    const students = cls.students || [];
+    if (students.length === 0) {
+      await showAlert("대상 인원이 없습니다.");
+      return;
+    }
+
+    const typeName = {
+      sendClassConfirmation: "수업 확정",
+      sendClassChange: "수업 변경",
+      sendClassNotification: "공지 알림",
+    }[endpoint];
+
+    if (
+      !(await showConfirm(
+        `[${cls.title}] 수업의 모든 참여자(${students.length}명)에게 ${typeName}을(를) 발송하시겠습니까?`,
+      ))
+    )
+      return;
+
+    try {
+      const dt = new Date(cls.datetime);
+      const classDate = formatApiDate(dt);
+
+      const promises = students.map((student) => {
+        const phone = (student.phone || student.phoneNumber || "").replace(
+          /[^0-9]/g,
+          "",
+        );
+        const payload = {
+          to: phone,
+          className: cls.title,
+          classDate: classDate,
+          userName: student.name,
+        };
+
+        return fetch(`https://musclecat.co.kr/${endpoint}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      });
+
+      await Promise.all(promises);
+      await showAlert("모든 알림 발송이 요청되었습니다.");
+    } catch (e) {
+      console.error(e);
+      await showAlert("발송 중 오류가 발생했습니다.");
+    }
+  }
 </script>
 
 <div class="max-w-6xl mx-auto p-6 md:p-10">
@@ -307,14 +369,55 @@
                   <div class="flex flex-col gap-6">
                     {#if cls.students && cls.students.length > 0}
                       <div>
-                        <p
-                          class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider mb-2 flex items-center gap-1.5 opacity-60"
+                        <div
+                          class="flex items-center justify-between mb-4 bg-surface-container-high/20 p-4 rounded-2xl border border-outline-variant/10"
                         >
-                          <span class="material-symbols-outlined text-[14px]"
-                            >groups</span
+                          <p
+                            class="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider flex items-center gap-1.5 opacity-60"
                           >
-                          예약 확정 명단 ({cls.students.length})
-                        </p>
+                            <span class="material-symbols-outlined text-[14px]"
+                              >groups</span
+                            >
+                            예약 확정 명단 ({cls.students.length})
+                          </p>
+
+                          <div class="flex items-center gap-2">
+                            <span
+                              class="text-[10px] font-bold text-on-surface-variant/40 mr-1"
+                              >전체 알림 발송:</span
+                            >
+                            <div class="flex items-center gap-1">
+                              <button
+                                onclick={() =>
+                                  sendClassWideNotification(
+                                    "sendClassConfirmation",
+                                    cls,
+                                  )}
+                                class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-primary/10 text-primary hover:bg-primary hover:text-on-primary transition-all"
+                                >확정</button
+                              >
+                              <button
+                                onclick={() =>
+                                  sendClassWideNotification(
+                                    "sendClassChange",
+                                    cls,
+                                  )}
+                                class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-secondary/10 text-secondary hover:bg-secondary hover:text-on-primary transition-all"
+                                >변경</button
+                              >
+                              <button
+                                onclick={() =>
+                                  sendClassWideNotification(
+                                    "sendClassNotification",
+                                    cls,
+                                  )}
+                                class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-on-surface-variant/10 text-on-surface-variant hover:bg-on-surface-variant hover:text-on-surface transition-all"
+                                >알림</button
+                              >
+                            </div>
+                          </div>
+                        </div>
+
                         <div class="flex flex-wrap gap-2">
                           {#each cls.students as student}
                             <div
@@ -331,12 +434,14 @@
                                     "-"}</span
                                 >
                               </div>
+
                               <button
                                 onclick={() => removeStudent(cls.id, student)}
                                 class="p-1.5 hover:bg-error/10 text-error rounded-lg opacity-60 hover:opacity-100 transition-all"
                                 title="신청 취소 처리"
                               >
-                                <span class="material-symbols-outlined text-[16px]"
+                                <span
+                                  class="material-symbols-outlined text-[16px]"
                                   >close</span
                                 >
                               </button>
