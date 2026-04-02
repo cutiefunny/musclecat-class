@@ -318,6 +318,17 @@
             waitingNo,
           );
 
+          // Admin notification
+          fetch("https://musclecat.co.kr/sendClassChange", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              to: "01083151379",
+              className: selectedClass.title,
+              guide: `새로운 수업 신청(대기)이 도착했습니다. ${name} ${phone}`,
+            }),
+          }).catch((e) => console.error("Admin notification failed:", e));
+
           await showAlert("대기자 명단에 등록되었습니다.");
           closeModal();
         } else {
@@ -344,6 +355,17 @@
         selectedClass.title,
         selectedClass.datetime,
       );
+
+      // Admin notification
+      fetch("https://musclecat.co.kr/sendClassChange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: "01083151379",
+          className: selectedClass.title,
+          guide: `새로운 수업 신청이 도착했습니다. ${name} ${phone}`,
+        }),
+      }).catch((e) => console.error("Admin notification failed:", e));
 
       const info = {
         title: selectedClass.title,
