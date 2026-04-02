@@ -14,6 +14,8 @@
     arrayRemove,
     runTransaction,
     onSnapshot,
+    addDoc,
+    setDoc,
   } from "firebase/firestore";
   import { showAlert, showConfirm } from "$lib/dialogStore";
 
@@ -25,6 +27,8 @@
   let unsubscribe = null;
   let mapElement;
   let map;
+  let showMap = false;
+  let isMapInitialized = false;
 
   // Modal & Dialog State
   let showModal = false;
@@ -37,6 +41,12 @@
   let isSubmitting = false;
   let isFriendRegistration = false;
   let autoCloseTimer = null;
+  let showChat = false;
+  let chatMessages = [];
+  let chatInput = "";
+  let chatUnsubscribe = null;
+  let inquiryUnsubscribe = null;
+  let chatContainer;
 
   onMount(() => {
     // Identity & Auto-fill Logic
@@ -50,13 +60,13 @@
     }
 
     fetchClassesRealtime();
-    if (window.naver && window.naver.maps) {
-      initMap();
-    }
+    // Map will be initialized when first expanded
   });
 
   onDestroy(() => {
     if (unsubscribe) unsubscribe();
+    if (chatUnsubscribe) chatUnsubscribe();
+    if (inquiryUnsubscribe) inquiryUnsubscribe();
     if (autoCloseTimer) clearTimeout(autoCloseTimer);
   });
 
@@ -433,6 +443,95 @@
       target.scrollIntoView({ behavior: "smooth" });
     }
   }
+
+  function toggleMap() {
+    showMap = !showMap;
+    if (showMap && !isMapInitialized && window.naver && window.naver.maps) {
+      initMap();
+      isMapInitialized = true;
+    }
+  }
+
+  function toggleChat() {
+    showChat = !showChat;
+    if (showChat) {
+      setTimeout(() => {
+        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+      }, 0);
+      setupChatListener();
+    } else {
+      if (chatUnsubscribe) chatUnsubscribe();
+    }
+  }
+
+  function setupChatListener() {
+    if (chatUnsubscribe) chatUnsubscribe();
+    if (inquiryUnsubscribe) inquiryUnsubscribe();
+
+    // Listen to parent doc existence (for deletions)
+    inquiryUnsubscribe = onSnapshot(doc(db, "inquiries", deviceId), (snapshot) => {
+      if (!snapshot.exists()) {
+        chatMessages = [];
+      }
+    });
+
+    const q = query(
+      collection(db, "inquiries", deviceId, "messages"),
+      orderBy("timestamp", "asc"),
+    );
+    chatUnsubscribe = onSnapshot(q, (snapshot) => {
+      chatMessages = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setTimeout(() => {
+        if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+      }, 0);
+    });
+  }
+
+  async function sendChatMessage() {
+    if (!chatInput.trim()) return;
+    const msg = chatInput.trim();
+    chatInput = "";
+
+    try {
+      const docRef = doc(db, "inquiries", deviceId);
+      const docSnap = await getDoc(docRef);
+      const isNew = !docSnap.exists();
+
+      await addDoc(collection(db, "inquiries", deviceId, "messages"), {
+        text: msg,
+        sender: "user",
+        timestamp: Timestamp.now(),
+      });
+      await setDoc(
+        docRef,
+        {
+          lastActivity: Timestamp.now(),
+          lastMessage: msg,
+          unreadByAdmin: true,
+          status: "답변필요",
+        },
+        { merge: true },
+      );
+
+      if (isNew) {
+        fetch("https://musclecat.co.kr/sendClassChange", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: "01083151379",
+            className: "기타수업",
+            guide: "새로운 상담 요청이 도착했습니다.",
+          }),
+        }).catch((e) => console.error("Notification API failed:", e));
+      }
+    } catch (e) {
+      console.error(e);
+      showAlert("메시지 전송에 실패했습니다.");
+    }
+  }
 </script>
 
 <svelte:head>
@@ -446,7 +545,7 @@
 <!-- Hero Section -->
 <button
   onclick={scrollToReservation}
-  class="w-full relative mb-12 rounded-xl overflow-hidden cursor-pointer group block"
+  class="w-full relative mb-4 rounded-xl overflow-hidden cursor-pointer group block"
 >
   <img
     class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02]"
@@ -466,26 +565,53 @@
 </button>
 
 <!-- Location Section -->
-<section class="mb-16">
-  <div class="flex items-center gap-2 mb-4 px-1">
-    <span class="material-symbols-outlined text-secondary">location_on</span>
-    <h3 class="text-xl font-headline font-bold text-primary">
-      근육고양이스튜디오
-    </h3>
-    <span class="text-sm text-on-surface-variant ml-2 font-medium"
-      >마포구 독막로 79</span
+<section class="mb-4">
+  <button
+    onclick={toggleMap}
+    class="w-full flex items-center justify-between p-5 bg-surface-container-low rounded-2xl border border-outline-variant/10 shadow-sm hover:bg-surface-container-high transition-all group"
+  >
+    <div class="flex items-center gap-3">
+      <div
+        class="w-10 h-10 rounded-full bg-secondary/10 flex items-center justify-center text-secondary group-hover:bg-secondary/20 transition-colors"
+      >
+        <span class="material-symbols-outlined">location_on</span>
+      </div>
+      <div class="text-left">
+        <h3 class="text-lg font-headline font-bold text-primary">
+          근육고양이스튜디오
+        </h3>
+        <p class="text-sm text-on-surface-variant font-medium">
+          상수역 1번 출구에서 도보 10초
+        </p>
+      </div>
+    </div>
+    <div
+      class="w-8 h-8 rounded-full flex items-center justify-center bg-surface-container-high transition-transform duration-300 {showMap
+        ? 'rotate-180'
+        : ''}"
     >
-  </div>
+      <span class="material-symbols-outlined text-on-surface-variant"
+        >expand_more</span
+      >
+    </div>
+  </button>
+
   <div
-    bind:this={mapElement}
-    class="w-full aspect-[2/1] min-h-[250px] rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden"
-  ></div>
+    class="mt-4 {showMap
+      ? 'block animate-in fade-in slide-in-from-top-4 duration-300'
+      : 'hidden'}"
+  >
+    <div
+      bind:this={mapElement}
+      class="w-full aspect-[2/1] min-h-[250px] rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden"
+    ></div>
+  </div>
 </section>
 
 <!-- Class Grid -->
 <div
   id="reservation-section"
-  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
 >
   {#each classes as cls}
     {@const slotsLeft = getSlotsLeft(cls)}
@@ -514,32 +640,27 @@
         >
           {cls.title}
         </h4>
-        <div class="space-y-3 mb-8">
+        <div class="space-y-2 mb-8">
           <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
-            !isApplied
+            class="flex items-center gap-2 text-on-surface-variant/{slotsLeft ===
+              0 && !isApplied
               ? '60'
               : '80'}"
           >
             <span class="font-body text-sm font-semibold"
               >{formatDate(cls.datetime)}</span
             >
-          </div>
-          <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
-            !isApplied
-              ? '60'
-              : '80'}"
-          >
+            <span class="text-on-surface-variant/30">•</span>
             <span class="font-body text-sm font-semibold"
               >{formatTime(cls.datetime)}</span
             >
           </div>
           <div
-            class="flex items-center text-on-surface-variant/{slotsLeft === 0 &&
-            !isApplied
-              ? '60'
-              : '80'}"
+            class="flex items-center {slotsLeft === 1
+              ? 'text-error font-bold'
+              : slotsLeft === 0
+                ? 'text-on-surface-variant/40'
+                : 'text-on-surface-variant/80'}"
           >
             <span class="font-body text-sm font-semibold"
               >총 정원 {TOTAL_SLOTS}석 중 {slotsLeft}자리 남음</span
@@ -602,12 +723,14 @@
             {/each}
           </div>
 
-          <button
-            onclick={() => openModal(cls, true)}
-            class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide btn-primary-gradient text-on-primary shadow-lg shadow-primary/20 active:scale-[0.98] transition-all"
-          >
-            친구도 예약해주기
-          </button>
+          {#if slotsLeft > 0}
+            <button
+              onclick={() => openModal(cls, true)}
+              class="block text-center w-full py-4 rounded-xl font-headline font-bold tracking-wide btn-primary-gradient text-on-primary shadow-lg shadow-primary/20 active:scale-[0.98] transition-all"
+            >
+              친구도 예약해주기
+            </button>
+          {/if}
         </div>
       {:else}
         <button
@@ -623,6 +746,95 @@
     </div>
   {/each}
 </div>
+
+<!-- Inquiry Section -->
+<section class="mt-4 mb-4 flex flex-col items-center w-full">
+  <button
+    onclick={toggleChat}
+    class="inline-flex items-center gap-2 px-8 py-4 bg-primary text-on-primary font-headline font-bold rounded-2xl shadow-lg shadow-primary/10 transition-all hover:scale-[1.03] active:scale-[0.98]"
+  >
+    <span class="material-symbols-outlined text-lg"
+      >{showChat ? "close" : "chat_bubble"}</span
+    >
+    {showChat ? "채팅창 닫기" : "실시간 문의하기"}
+  </button>
+
+  {#if showChat}
+    <div
+      class="mt-4 w-full max-w-xl bg-surface-container-low rounded-3xl overflow-hidden border border-outline-variant/10 flex flex-col h-[400px] text-left animate-in fade-in slide-in-from-top-4 duration-300"
+    >
+      <!-- Chat Header -->
+      <div
+        class="p-4 bg-surface-container border-b border-outline-variant/10 flex items-center gap-3"
+      >
+        <div
+          class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary"
+        >
+          <span class="material-symbols-outlined text-sm">pets</span>
+        </div>
+        <div>
+          <p class="text-xs font-bold text-primary">냐사장</p>
+          <p class="text-[10px] text-on-surface-variant">
+            보통 1시간 이내에 답변을 드려요
+          </p>
+        </div>
+      </div>
+      <!-- Message Area -->
+      <div
+        bind:this={chatContainer}
+        class="flex-1 overflow-y-auto p-4 space-y-3 bg-surface-dim/10"
+      >
+        {#if chatMessages.length === 0}
+          <div
+            class="h-full flex flex-col items-center justify-center opacity-30 text-center"
+          >
+            <span class="material-symbols-outlined text-3xl mb-2"
+              >auto_awesome</span
+            >
+            <p class="text-[11px]">
+              무료 기타 체험, 원데이 클래스 등<br />궁금한 내용을 남겨주세요!
+            </p>
+          </div>
+        {/if}
+        {#each chatMessages as msg}
+          <div
+            class="flex {msg.sender === 'user'
+              ? 'justify-end'
+              : 'justify-start'}"
+          >
+            <div
+              class="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm shadow-sm {msg.sender ===
+              'user'
+                ? 'bg-primary text-on-primary rounded-tr-none'
+                : 'bg-surface-container-high text-on-surface rounded-tl-none'}"
+            >
+              {msg.text}
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      <!-- Input Area -->
+      <div class="p-4 bg-surface-container border-t border-outline-variant/10">
+        <div class="relative">
+          <input
+            type="text"
+            bind:value={chatInput}
+            onkeydown={(e) => e.key === "Enter" && sendChatMessage()}
+            placeholder="문의 내용을 입력하세요..."
+            class="w-full bg-surface-container-low border-none rounded-2xl px-5 py-4 pr-12 text-sm text-on-surface placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+          />
+          <button
+            onclick={sendChatMessage}
+            class="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl bg-primary text-on-primary flex items-center justify-center hover:scale-110 active:scale-95 transition-all shadow-lg shadow-primary/20"
+          >
+            <span class="material-symbols-outlined text-lg">send</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+</section>
 
 <!-- Modal Overlay -->
 {#if showModal}

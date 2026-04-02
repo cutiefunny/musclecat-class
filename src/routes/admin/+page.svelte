@@ -14,13 +14,24 @@
     where,
     Timestamp,
     arrayRemove,
-    runTransaction 
+    runTransaction,
+    onSnapshot,
+    setDoc
   } from "firebase/firestore";
   import { showAlert, showConfirm } from "$lib/dialogStore";
 
   let classes = [];
   let isLoading = true;
   let isSubmitting = false;
+  
+  // Chat Management State
+  let inquiries = [];
+  let selectedInquiry = null;
+  let adminChatMessages = [];
+  let adminChatInput = "";
+  let inquiriesUnsubscribe = null;
+  let adminChatUnsubscribe = null;
+  let adminChatContainer;
 
   console.log("Admin page script initialized");
 
@@ -33,7 +44,14 @@
     students: []
   };
 
-  onMount(fetchClasses);
+  onMount(() => {
+    fetchClasses();
+    fetchInquiriesRealtime();
+    return () => {
+      if (inquiriesUnsubscribe) inquiriesUnsubscribe();
+      if (adminChatUnsubscribe) adminChatUnsubscribe();
+    };
+  });
 
   async function fetchClasses() {
     isLoading = true;
@@ -245,6 +263,83 @@
     } catch (e) {
       console.error(e);
       await showAlert("발송 중 오류가 발생했습니다.");
+    }
+  }
+
+  // --- Chat Management Logic ---
+
+  function fetchInquiriesRealtime() {
+    const q = query(collection(db, "inquiries"), orderBy("lastActivity", "desc"));
+    inquiriesUnsubscribe = onSnapshot(q, (snapshot) => {
+      inquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    });
+  }
+
+  function selectInquiry(inquiry) {
+    selectedInquiry = inquiry;
+    if (adminChatUnsubscribe) adminChatUnsubscribe();
+    
+    // Clear unread flag
+    updateDoc(doc(db, "inquiries", inquiry.id), { unreadByAdmin: false });
+
+    const q = query(
+      collection(db, "inquiries", inquiry.id, "messages"),
+      orderBy("timestamp", "asc")
+    );
+    adminChatUnsubscribe = onSnapshot(q, (snapshot) => {
+      adminChatMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTimeout(() => {
+        if (adminChatContainer) adminChatContainer.scrollTop = adminChatContainer.scrollHeight;
+      }, 0);
+    });
+  }
+
+  async function adminSendMessage() {
+    if (!adminChatInput.trim() || !selectedInquiry) return;
+    const msg = adminChatInput.trim();
+    adminChatInput = "";
+
+    try {
+      await addDoc(collection(db, "inquiries", selectedInquiry.id, "messages"), {
+        text: msg,
+        sender: "admin",
+        timestamp: Timestamp.now()
+      });
+      await updateDoc(doc(db, "inquiries", selectedInquiry.id), {
+        lastActivity: Timestamp.now(),
+        lastMessage: msg,
+        status: "상담중"
+      });
+    } catch (e) {
+      console.error(e);
+      showAlert("메시지 실패");
+    }
+  }
+
+  async function closeInquiry(id) {
+    if (!(await showConfirm("상담을 완료 처리하시겠습니까?"))) return;
+    try {
+      await updateDoc(doc(db, "inquiries", id), { status: "완료" });
+      if (selectedInquiry?.id === id) selectedInquiry = { ...selectedInquiry, status: "완료" };
+    } catch (e) {
+      console.error(e);
+      showAlert("처리 실패");
+    }
+  }
+
+  async function deleteInquiry(id) {
+    if (!(await showConfirm("이 상담 내역을 영구히 삭제하시겠습니까?"))) return;
+    try {
+      if (selectedInquiry?.id === id) {
+        selectedInquiry = null;
+        if (adminChatUnsubscribe) adminChatUnsubscribe();
+        adminChatMessages = [];
+      }
+      await deleteDoc(doc(db, "inquiries", id));
+      await showAlert("삭제되었습니다.");
+    } catch (e) {
+      console.error(e);
+      await showAlert("삭제 실패");
     }
   }
 </script>
@@ -498,6 +593,143 @@
         {/if}
       </tbody>
     </table>
+  </div>
+
+  <!-- Chat Management Section -->
+  <div class="mt-24 mb-20">
+    <h2
+      class="text-3xl font-headline font-bold text-primary mb-10 flex items-center gap-3"
+    >
+      <span class="material-symbols-outlined text-4xl">chat_paste_go</span>
+      실시간 상담 관리
+    </h2>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <!-- Inquiry List -->
+      <div
+        class="lg:col-span-1 bg-surface-container-low rounded-3xl overflow-hidden border border-outline-variant/10 shadow-sm flex flex-col h-[600px]"
+      >
+        <div class="p-5 bg-surface-container border-b border-outline-variant/10">
+          <p class="text-xs font-bold text-on-surface-variant uppercase tracking-widest px-1">문의 목록</p>
+        </div>
+        <div class="flex-1 overflow-y-auto divide-y divide-outline-variant/5">
+          {#if inquiries.length === 0}
+            <div class="p-20 text-center text-on-surface-variant opacity-40 italic text-sm">
+              상상담 문의가 없습니다.
+            </div>
+          {/if}
+          {#each inquiries as inquiry}
+            <div class="relative group/inquiry">
+              <button
+                onclick={() => selectInquiry(inquiry)}
+                class="w-full p-6 text-left hover:bg-surface-container-lowest transition-colors relative {selectedInquiry?.id === inquiry.id ? 'bg-primary/5' : ''}"
+              >
+                <div class="flex justify-between items-start mb-2">
+                  <span class="text-xs font-bold text-on-surface-variant uppercase tracking-tighter truncate max-w-[120px]">
+                    ID: {inquiry.id.slice(0, 8)}
+                  </span>
+                  <div class="flex items-center gap-2">
+                    {#if inquiry.unreadByAdmin}
+                      <span class="w-2 h-2 rounded-full bg-error animate-pulse"></span>
+                    {/if}
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full {
+                      inquiry.status === '답변필요' ? 'bg-error text-on-error' :
+                      inquiry.status === '상담중' ? 'bg-primary text-on-primary' :
+                      'bg-surface-container-highest text-on-surface-variant'
+                    }">
+                      {inquiry.status || '신규'}
+                    </span>
+                  </div>
+                </div>
+                <p class="text-sm font-bold text-on-surface line-clamp-1 mb-1">{inquiry.lastMessage || '내용 없음'}</p>
+                <p class="text-[10px] text-on-surface-variant opacity-60">
+                  {inquiry.lastActivity?.toDate ? inquiry.lastActivity.toDate().toLocaleString() : '-'}
+                </p>
+              </button>
+              <button
+                onclick={(e) => { e.stopPropagation(); deleteInquiry(inquiry.id); }}
+                class="absolute right-4 bottom-4 p-2 opacity-0 group-hover/inquiry:opacity-60 hover:opacity-100 hover:bg-error/10 text-error rounded-lg transition-all"
+                title="상담 내역 삭제"
+              >
+                <span class="material-symbols-outlined text-sm">delete</span>
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Chat Window -->
+      <div
+        class="lg:col-span-2 bg-surface-container-low rounded-3xl overflow-hidden border border-outline-variant/10 shadow-sm flex flex-col h-[600px]"
+      >
+        {#if selectedInquiry}
+           <!-- Header -->
+           <div class="p-5 bg-surface-container border-b border-outline-variant/10 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                 <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                    <span class="material-symbols-outlined">person</span>
+                 </div>
+                 <div>
+                    <p class="text-sm font-bold text-on-surface">문의자 ({selectedInquiry.id.slice(0, 8)})</p>
+                    <p class="text-[10px] text-on-surface-variant font-medium">실시간 세션 활성 중</p>
+                 </div>
+              </div>
+              <div class="flex items-center gap-2">
+                 {#if selectedInquiry.status !== '완료'}
+                    <button 
+                       onclick={() => closeInquiry(selectedInquiry.id)}
+                       class="text-[11px] font-bold px-4 py-2 bg-surface-container-highest text-on-surface-variant rounded-xl hover:bg-on-surface-variant hover:text-on-surface transition-all"
+                    >
+                       상담 완료 처리
+                    </button>
+                 {/if}
+              </div>
+           </div>
+
+           <!-- Messages -->
+           <div bind:this={adminChatContainer} class="flex-1 overflow-y-auto p-6 space-y-4 bg-surface-dim/5">
+              {#each adminChatMessages as msg}
+                 <div class="flex {msg.sender === 'admin' ? 'justify-end' : 'justify-start'}">
+                    <div class="flex flex-col {msg.sender === 'admin' ? 'items-end' : 'items-start'} max-w-[70%]">
+                       <span class="text-[9px] font-bold text-on-surface-variant uppercase tracking-tighter mb-1 px-1">
+                          {msg.sender === 'admin' ? '관리자 답변' : '사용자 문의'}
+                       </span>
+                       <div class="px-4 py-2.5 rounded-2xl text-sm shadow-sm {
+                          msg.sender === 'admin' ? 'bg-primary text-on-primary rounded-tr-none' : 'bg-surface-container-lowest text-on-surface rounded-tl-none border border-outline-variant/5'
+                       }">
+                          {msg.text}
+                       </div>
+                    </div>
+                 </div>
+              {/each}
+           </div>
+
+           <!-- Input -->
+           <div class="p-5 bg-surface-container border-t border-outline-variant/10">
+              <div class="relative">
+                 <input 
+                    type="text" 
+                    bind:value={adminChatInput}
+                    onkeydown={(e) => e.key === 'Enter' && adminSendMessage()}
+                    placeholder="사용자에게 보낼 메시지 입력..."
+                    class="w-full bg-surface-container-lowest rounded-2xl p-5 pr-14 text-sm outline-none focus:ring-2 focus:ring-primary/20 transition-all border border-outline-variant/5"
+                 />
+                 <button 
+                    onclick={adminSendMessage}
+                    class="absolute right-2 top-1/2 -translate-y-1/2 w-12 h-12 bg-primary text-on-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
+                 >
+                    <span class="material-symbols-outlined text-xl">send</span>
+                 </button>
+              </div>
+           </div>
+        {:else}
+           <div class="h-full flex flex-col items-center justify-center opacity-30 italic">
+              <span class="material-symbols-outlined text-6xl mb-4">forum</span>
+              <p>왼쪽 목록에서 문의 내역을 선택해주세요.</p>
+           </div>
+        {/if}
+      </div>
+    </div>
   </div>
 </div>
 
