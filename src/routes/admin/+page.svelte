@@ -44,6 +44,33 @@
     students: []
   };
 
+  // Change Notification Modal State
+  let isChangeModalOpen = false;
+  let changeModalTargetClass = null;
+  let changeModalGuide = "";
+
+  function openChangeModal(cls) {
+    if (!cls.students || cls.students.length === 0) {
+      showAlert("대상 인원이 없습니다.");
+      return;
+    }
+    changeModalTargetClass = cls;
+    changeModalGuide = "";
+    isChangeModalOpen = true;
+  }
+
+  async function confirmSendClassChange() {
+    if (!changeModalGuide.trim()) {
+      await showAlert("안내문을 입력해주세요.");
+      return;
+    }
+    
+    const cls = changeModalTargetClass;
+    isChangeModalOpen = false;
+    
+    await sendClassWideNotification("sendClassChange", cls, { guide: changeModalGuide });
+  }
+
   onMount(() => {
     fetchClasses();
     fetchInquiriesRealtime();
@@ -215,7 +242,7 @@
     return `${month}월${date}일 ${ampm}${hour}시`;
   }
 
-  async function sendClassWideNotification(endpoint, cls) {
+  async function sendClassWideNotification(endpoint, cls, extraData = {}) {
     const students = cls.students || [];
     if (students.length === 0) {
       await showAlert("대상 인원이 없습니다.");
@@ -228,6 +255,9 @@
       sendClassNotification: "공지 알림",
     }[endpoint];
 
+    // Only ask for common confirmation if it's NOT a change notification (which already has its own flow)
+    // Actually, asking again might be safer, but the user said "send when 'Send' button is clicked".
+    // I'll keep the confirmation for safety as it was already there.
     if (
       !(await showConfirm(
         `[${cls.title}] 수업의 모든 참여자(${students.length}명)에게 ${typeName}을(를) 발송하시겠습니까?`,
@@ -249,6 +279,7 @@
           className: cls.title,
           classDate: classDate,
           userName: student.name,
+          ...extraData
         };
 
         return fetch(`https://musclecat.co.kr/${endpoint}`, {
@@ -491,15 +522,11 @@
                                 class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-primary/10 text-primary hover:bg-primary hover:text-on-primary transition-all"
                                 >확정</button
                               >
-                              <button
-                                onclick={() =>
-                                  sendClassWideNotification(
-                                    "sendClassChange",
-                                    cls,
-                                  )}
-                                class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-secondary/10 text-secondary hover:bg-secondary hover:text-on-primary transition-all"
-                                >변경</button
-                              >
+                                <button
+                                  onclick={() => openChangeModal(cls)}
+                                  class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-secondary/10 text-secondary hover:bg-secondary hover:text-on-primary transition-all"
+                                  >변경</button
+                                >
                               <button
                                 onclick={() =>
                                   sendClassWideNotification(
@@ -732,6 +759,60 @@
     </div>
   </div>
 </div>
+
+<!-- 수업 변경 안내 모달 -->
+{#if isChangeModalOpen}
+<div 
+  class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-all animate-in fade-in duration-200"
+  role="dialog"
+  aria-modal="true"
+>
+  <div 
+    class="bg-surface-container-highest max-w-lg w-full rounded-3xl p-8 shadow-2xl animate-in zoom-in-95 duration-200 border border-outline-variant/10"
+  >
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-12 h-12 rounded-2xl bg-secondary/10 flex items-center justify-center text-secondary">
+        <span class="material-symbols-outlined text-3xl">notification_important</span>
+      </div>
+      <div>
+        <h3 class="text-xl font-bold text-on-surface">수업 변경 안내 발송</h3>
+        <p class="text-xs text-on-surface-variant font-medium">[{changeModalTargetClass?.title}] 참여 참여자 공지</p>
+      </div>
+    </div>
+
+    <p class="text-sm text-on-surface-variant mb-8 leading-relaxed">
+      수업 변경에 대한 상세 내용을 입력해주세요. 
+      <br/>발신 버튼을 누르면 <strong>{changeModalTargetClass?.students?.length || 0}명</strong>의 신청자에게 알림톡이 전송됩니다.
+    </p>
+
+    <div class="space-y-2 mb-8">
+      <label for="guide-input" class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant px-1 opacity-70">안내 문구 입력</label>
+      <textarea 
+        id="guide-input" 
+        bind:value={changeModalGuide}
+        class="w-full bg-surface-container-lowest rounded-2xl p-5 text-sm text-on-surface border border-outline-variant/10 focus:ring-4 focus:ring-secondary/10 focus:border-secondary outline-none transition-all resize-none min-h-[140px] shadow-inner" 
+        placeholder="예: 5월 10일 수업이 5월 12일 저녁 7시로 변경되었습니다. 부득이한 일정 변경에 죄송한 말씀을 전하며, 참가가 어려우신 분은 말씀 부탁드립니다."
+      ></textarea>
+    </div>
+
+    <div class="flex gap-4">
+      <button 
+        onclick={() => isChangeModalOpen = false}
+        class="flex-1 py-4 bg-surface-container-high text-on-surface-variant font-bold rounded-2xl transition-all hover:bg-surface-container-highest active:scale-95"
+      >
+        취소
+      </button>
+      <button 
+        onclick={confirmSendClassChange}
+        class="flex-1 py-4 bg-secondary text-white font-bold rounded-2xl shadow-lg shadow-secondary/20 transition-all hover:scale-[1.02] hover:shadow-xl active:scale-95 flex items-center justify-center gap-2"
+      >
+        <span class="material-symbols-outlined text-xl">send</span>
+        발신하기
+      </button>
+    </div>
+  </div>
+</div>
+{/if}
 
 <style>
   /* Material Date Picker Styling Hint */
