@@ -104,6 +104,11 @@
           datetime: dtString
         };
       });
+
+      // After fetching classes, if we are not editing, refresh the default datetime
+      if (!editingId) {
+        resetForm();
+      }
     } catch (e) {
       console.error(e);
       alert("데이터를 불러오는 중 오류 발생");
@@ -130,8 +135,8 @@
         await addDoc(collection(db, "guitarClass"), payload);
         await showAlert("추가 완료");
       }
-      resetForm();
       await fetchClasses();
+      resetForm();
     } catch (e) {
       console.error(e);
       await showAlert("작업 중 오류 발생: " + e.message);
@@ -223,11 +228,40 @@
 
   function resetForm() {
     editingId = null;
+
+    let baseDt = new Date();
+    // Use the latest class in the current list as the base if available
+    if (classes.length > 0) {
+      baseDt = new Date(classes[classes.length - 1].datetime);
+    }
+
+    const day = baseDt.getDay(); // 0: Sun, 6: Sat
+    let nextDt = new Date(baseDt);
+
+    if (day === 6) {
+      // If the last class is Saturday, the next slot is Sunday (the next day)
+      nextDt.setDate(baseDt.getDate() + 1);
+    } else {
+      // If the last class is Sunday (or any other day), move to next week's Saturday
+      // If today/base is Sunday (0), next Sat is in 6 days.
+      const daysUntilSaturday = (day === 0) ? 6 : (6 - day + 7) % 7;
+      // If base is already Saturday (handled above), or if it's the same day, we move to next week
+      nextDt.setDate(baseDt.getDate() + (daysUntilSaturday || 7));
+    }
+
+    // Default time is always 3 PM (15:00)
+    nextDt.setHours(15, 0, 0, 0);
+
+    const offset = nextDt.getTimezoneOffset() * 60000;
+    const defaultDatetimeString = new Date(nextDt.getTime() - offset)
+      .toISOString()
+      .slice(0, 16);
+
     form = {
       title: "",
-      datetime: "",
+      datetime: defaultDatetimeString,
       image: "/title.jpg",
-      students: []
+      students: [],
     };
   }
 
@@ -242,6 +276,16 @@
     return `${month}월${date}일 ${ampm}${hour}시`;
   }
 
+  function formatTime(dt) {
+    if (!dt) return "";
+    let hour = dt.getHours();
+    const minute = dt.getMinutes().toString().padStart(2, "0");
+    const ampm = hour >= 12 ? "저녁" : "오전";
+    if (hour > 12) hour -= 12;
+    if (hour === 0) hour = 12;
+    return `${ampm} ${hour}:${minute}`;
+  }
+
   async function sendClassWideNotification(endpoint, cls, extraData = {}) {
     const students = cls.students || [];
     if (students.length === 0) {
@@ -252,7 +296,7 @@
     const typeName = {
       sendClassConfirmation: "수업 확정",
       sendClassChange: "수업 변경",
-      sendClassNotification: "공지 알림",
+      sendClassAlarm: "당일 수업 알림",
     }[endpoint];
 
     // Only ask for common confirmation if it's NOT a change notification (which already has its own flow)
@@ -268,6 +312,7 @@
     try {
       const dt = new Date(cls.datetime);
       const classDate = formatApiDate(dt);
+      const classTime = formatTime(dt);
 
       const promises = students.map((student) => {
         const phone = (student.phone || student.phoneNumber || "").replace(
@@ -278,6 +323,7 @@
           to: phone,
           className: cls.title,
           classDate: classDate,
+          classTime: classTime,
           userName: student.name,
           ...extraData
         };
@@ -530,7 +576,7 @@
                               <button
                                 onclick={() =>
                                   sendClassWideNotification(
-                                    "sendClassNotification",
+                                    "sendClassAlarm",
                                     cls,
                                   )}
                                 class="text-[9px] font-bold px-3 py-1.5 rounded-full bg-on-surface-variant/10 text-on-surface-variant hover:bg-on-surface-variant hover:text-on-surface transition-all"

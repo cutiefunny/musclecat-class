@@ -319,13 +319,14 @@
           );
 
           // Admin notification
-          fetch("https://musclecat.co.kr/sendClassChange", {
+          fetch("https://musclecat.co.kr/sendClassRequestNotice", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              to: "01083151379",
               className: selectedClass.title,
-              guide: `새로운 수업 신청(대기)이 도착했습니다. ${name} ${phone}`,
+              classDate: formatApiDate(selectedClass.datetime),
+              userName: name,
+              userPhone: phone,
             }),
           }).catch((e) => console.error("Admin notification failed:", e));
 
@@ -357,13 +358,14 @@
       );
 
       // Admin notification
-      fetch("https://musclecat.co.kr/sendClassChange", {
+      fetch("https://musclecat.co.kr/sendClassRequestNotice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: "01083151379",
           className: selectedClass.title,
-          guide: `새로운 수업 신청이 도착했습니다. ${name} ${phone}`,
+          classDate: formatApiDate(selectedClass.datetime),
+          userName: name,
+          userPhone: phone,
         }),
       }).catch((e) => console.error("Admin notification failed:", e));
 
@@ -539,13 +541,11 @@
       );
 
       if (isNew) {
-        fetch("https://musclecat.co.kr/sendClassChange", {
+        fetch("https://musclecat.co.kr/sendClassQuestion", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            to: "01083151379",
             className: "기타수업",
-            guide: "새로운 상담 요청이 도착했습니다.",
           }),
         }).catch((e) => console.error("Notification API failed:", e));
       }
